@@ -41,12 +41,20 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Transaction methods
-  async getTransactions(): Promise<Transaction[]> {
-    return db.select().from(transactions).orderBy(desc(transactions.englishDate));
+  async getTransactions(userId: number): Promise<Transaction[]> {
+    return db.select()
+      .from(transactions)
+      .where(eq(transactions.userId, userId))
+      .orderBy(desc(transactions.englishDate));
   }
 
-  async getTransactionById(id: number): Promise<Transaction | undefined> {
-    const result = await db.select().from(transactions).where(eq(transactions.id, id));
+  async getTransactionById(id: number, userId: number): Promise<Transaction | undefined> {
+    const result = await db.select()
+      .from(transactions)
+      .where(and(
+        eq(transactions.id, id),
+        eq(transactions.userId, userId)
+      ));
     return result.length > 0 ? result[0] : undefined;
   }
 
@@ -55,6 +63,7 @@ export class DatabaseStorage implements IStorage {
     
     // Update payment method balance
     await this.updatePaymentMethodBalance(
+      transaction.userId,
       transaction.paymentType,
       transaction.type === "Income" ? transaction.amount : -transaction.amount
     );
@@ -62,8 +71,8 @@ export class DatabaseStorage implements IStorage {
     return newTransaction;
   }
 
-  async updateTransaction(id: number, updatedFields: Partial<InsertTransaction>): Promise<Transaction | undefined> {
-    const existingTransaction = await this.getTransactionById(id);
+  async updateTransaction(id: number, userId: number, updatedFields: Partial<InsertTransaction>): Promise<Transaction | undefined> {
+    const existingTransaction = await this.getTransactionById(id, userId);
     
     if (!existingTransaction) {
       return undefined;
@@ -77,6 +86,7 @@ export class DatabaseStorage implements IStorage {
     ) {
       // Revert the previous transaction's effect on balance
       await this.updatePaymentMethodBalance(
+        userId,
         existingTransaction.paymentType,
         existingTransaction.type === "Income" ? -existingTransaction.amount : existingTransaction.amount
       );
@@ -87,6 +97,7 @@ export class DatabaseStorage implements IStorage {
       const newType = updatedFields.type || existingTransaction.type;
       
       await this.updatePaymentMethodBalance(
+        userId,
         newPaymentType,
         newType === "Income" ? newAmount : -newAmount
       );
@@ -95,14 +106,17 @@ export class DatabaseStorage implements IStorage {
     const [updated] = await db
       .update(transactions)
       .set(updatedFields)
-      .where(eq(transactions.id, id))
+      .where(and(
+        eq(transactions.id, id),
+        eq(transactions.userId, userId)
+      ))
       .returning();
     
     return updated;
   }
 
-  async deleteTransaction(id: number): Promise<boolean> {
-    const transaction = await this.getTransactionById(id);
+  async deleteTransaction(id: number, userId: number): Promise<boolean> {
+    const transaction = await this.getTransactionById(id, userId);
     
     if (!transaction) {
       return false;
@@ -110,25 +124,36 @@ export class DatabaseStorage implements IStorage {
     
     // Revert the effect of this transaction on payment method balance
     await this.updatePaymentMethodBalance(
+      userId,
       transaction.paymentType,
       transaction.type === "Income" ? -transaction.amount : transaction.amount
     );
     
     const result = await db
       .delete(transactions)
-      .where(eq(transactions.id, id))
+      .where(and(
+        eq(transactions.id, id),
+        eq(transactions.userId, userId)
+      ))
       .returning({ id: transactions.id });
     
     return result.length > 0;
   }
 
   // Payment method methods
-  async getPaymentMethods(): Promise<PaymentMethod[]> {
-    return db.select().from(paymentMethods);
+  async getPaymentMethods(userId: number): Promise<PaymentMethod[]> {
+    return db.select()
+      .from(paymentMethods)
+      .where(eq(paymentMethods.userId, userId));
   }
 
-  async getPaymentMethodByName(name: PaymentType): Promise<PaymentMethod | undefined> {
-    const result = await db.select().from(paymentMethods).where(eq(paymentMethods.name, name));
+  async getPaymentMethodByName(userId: number, name: PaymentType): Promise<PaymentMethod | undefined> {
+    const result = await db.select()
+      .from(paymentMethods)
+      .where(and(
+        eq(paymentMethods.userId, userId),
+        eq(paymentMethods.name, name)
+      ));
     return result.length > 0 ? result[0] : undefined;
   }
 
@@ -141,8 +166,8 @@ export class DatabaseStorage implements IStorage {
     return newPaymentMethod;
   }
 
-  async updatePaymentMethod(name: PaymentType, balance: number): Promise<PaymentMethod | undefined> {
-    const existingPaymentMethod = await this.getPaymentMethodByName(name);
+  async updatePaymentMethod(userId: number, name: PaymentType, balance: number): Promise<PaymentMethod | undefined> {
+    const existingPaymentMethod = await this.getPaymentMethodByName(userId, name);
     
     if (!existingPaymentMethod) {
       return undefined;
@@ -154,7 +179,10 @@ export class DatabaseStorage implements IStorage {
         balance,
         updatedAt: new Date()
       })
-      .where(eq(paymentMethods.name, name))
+      .where(and(
+        eq(paymentMethods.userId, userId),
+        eq(paymentMethods.name, name)
+      ))
       .returning();
     
     return updated;

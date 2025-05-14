@@ -5,21 +5,24 @@ import {
   insertTransactionSchema, 
   updatePaymentMethodSchema,
   PAYMENT_TYPES,
-  transactionFormSchema
+  transactionFormSchema,
+  User as SelectUser
 } from "@shared/schema";
 import { z } from "zod";
+import { setupAuth } from "./auth";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Initialize the server
   const httpServer = createServer(app);
   
-  // Initialize payment methods if they don't exist
-  await storage.initializePaymentMethods();
+  // Setup authentication
+  setupAuth(app);
 
   // Get all transactions
   app.get("/api/transactions", async (req: Request, res: Response) => {
     try {
-      const transactions = await storage.getTransactions();
+      const userId = (req.user as SelectUser).id;
+      const transactions = await storage.getTransactions(userId);
       res.json(transactions);
     } catch (error) {
       res.status(500).json({ message: "Error fetching transactions" });
@@ -30,11 +33,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/transactions/:id", async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
+      const userId = (req.user as SelectUser).id;
+      
       if (isNaN(id)) {
         return res.status(400).json({ message: "Invalid transaction ID" });
       }
 
-      const transaction = await storage.getTransactionById(id);
+      const transaction = await storage.getTransactionById(id, userId);
       if (!transaction) {
         return res.status(404).json({ message: "Transaction not found" });
       }
@@ -48,8 +53,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Create a new transaction
   app.post("/api/transactions", async (req: Request, res: Response) => {
     try {
+      const userId = (req.user as SelectUser).id;
       const validatedData = transactionFormSchema.parse(req.body);
-      const transaction = await storage.createTransaction(validatedData);
+      
+      // Add the user ID to the transaction data
+      const transactionData = {
+        ...validatedData,
+        userId
+      };
+      
+      const transaction = await storage.createTransaction(transactionData);
       res.status(201).json(transaction);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -66,6 +79,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch("/api/transactions/:id", async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
+      const userId = (req.user as SelectUser).id;
+      
       if (isNaN(id)) {
         return res.status(400).json({ message: "Invalid transaction ID" });
       }
@@ -73,7 +88,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Partial validation of the update data
       const validatedData = insertTransactionSchema.partial().parse(req.body);
       
-      const updatedTransaction = await storage.updateTransaction(id, validatedData);
+      const updatedTransaction = await storage.updateTransaction(id, userId, validatedData);
       if (!updatedTransaction) {
         return res.status(404).json({ message: "Transaction not found" });
       }
@@ -94,11 +109,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete("/api/transactions/:id", async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
+      const userId = (req.user as SelectUser).id;
+      
       if (isNaN(id)) {
         return res.status(400).json({ message: "Invalid transaction ID" });
       }
 
-      const success = await storage.deleteTransaction(id);
+      const success = await storage.deleteTransaction(id, userId);
       if (!success) {
         return res.status(404).json({ message: "Transaction not found" });
       }
@@ -112,7 +129,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get all payment methods
   app.get("/api/payment-methods", async (req: Request, res: Response) => {
     try {
-      const paymentMethods = await storage.getPaymentMethods();
+      const userId = (req.user as SelectUser).id;
+      const paymentMethods = await storage.getPaymentMethods(userId);
       res.json(paymentMethods);
     } catch (error) {
       res.status(500).json({ message: "Error fetching payment methods" });
@@ -122,12 +140,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get payment method by name
   app.get("/api/payment-methods/:name", async (req: Request, res: Response) => {
     try {
+      const userId = (req.user as SelectUser).id;
       const name = req.params.name;
       if (!PAYMENT_TYPES.includes(name as any)) {
         return res.status(400).json({ message: "Invalid payment method name" });
       }
 
-      const paymentMethod = await storage.getPaymentMethodByName(name as any);
+      const paymentMethod = await storage.getPaymentMethodByName(userId, name as any);
       if (!paymentMethod) {
         return res.status(404).json({ message: "Payment method not found" });
       }
@@ -141,6 +160,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Update payment method balance
   app.patch("/api/payment-methods/:name", async (req: Request, res: Response) => {
     try {
+      const userId = (req.user as SelectUser).id;
       const name = req.params.name;
       if (!PAYMENT_TYPES.includes(name as any)) {
         return res.status(400).json({ message: "Invalid payment method name" });
@@ -148,7 +168,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { balance } = updatePaymentMethodSchema.parse(req.body);
       
-      const updatedPaymentMethod = await storage.updatePaymentMethod(name as any, balance);
+      const updatedPaymentMethod = await storage.updatePaymentMethod(userId, name as any, balance);
       if (!updatedPaymentMethod) {
         return res.status(404).json({ message: "Payment method not found" });
       }
@@ -168,8 +188,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get summary information (total income, expense, balance)
   app.get("/api/summary", async (req: Request, res: Response) => {
     try {
-      const transactions = await storage.getTransactions();
-      const paymentMethods = await storage.getPaymentMethods();
+      const userId = (req.user as SelectUser).id;
+      const transactions = await storage.getTransactions(userId);
+      const paymentMethods = await storage.getPaymentMethods(userId);
       
       const totalIncome = transactions
         .filter(t => t.type === "Income")
