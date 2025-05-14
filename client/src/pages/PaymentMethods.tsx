@@ -1,12 +1,17 @@
+import { useState } from "react";
 import { PaymentMethodCards } from "@/components/PaymentMethodCards";
+import { UpdatePaymentMethodForm } from "@/components/UpdatePaymentMethodForm";
 import { Helmet } from "react-helmet";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { useQuery } from "@tanstack/react-query";
 import { PaymentMethod } from "@shared/schema";
 import { formatCurrency } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
 
 export default function PaymentMethods() {
+  const [editingPaymentMethod, setEditingPaymentMethod] = useState<PaymentMethod | null>(null);
+  
   const { data: paymentMethods = [], isLoading } = useQuery<PaymentMethod[]>({
     queryKey: ["/api/payment-methods"],
   });
@@ -63,6 +68,14 @@ export default function PaymentMethods() {
         {/* Payment Method Cards */}
         <PaymentMethodCards />
 
+        {/* Editing Form */}
+        {editingPaymentMethod && (
+          <UpdatePaymentMethodForm 
+            paymentMethod={editingPaymentMethod} 
+            onClose={() => setEditingPaymentMethod(null)} 
+          />
+        )}
+        
         {/* Detailed Payment Method List */}
         <h2 className="text-lg font-semibold mb-4">Payment Method Details</h2>
         <div className="grid grid-cols-1 gap-4 mb-6">
@@ -89,7 +102,7 @@ export default function PaymentMethods() {
                         {paymentMethodIcons[method.name]?.description || "Payment method for transactions"}
                       </p>
                       <p className="text-sm text-gray-500">
-                        Last updated: {new Date(method.updatedAt).toLocaleString()}
+                        Last updated: {method.updatedAt ? new Date(method.updatedAt).toLocaleString() : "N/A"}
                       </p>
                     </div>
                     <div className="mt-4 md:mt-0">
@@ -102,6 +115,16 @@ export default function PaymentMethods() {
                     </div>
                   </div>
                 </CardContent>
+                <CardFooter className="flex justify-end pb-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setEditingPaymentMethod(method)}
+                    className="text-primary"
+                  >
+                    <i className="ri-pencil-line mr-1"></i> Update Balance
+                  </Button>
+                </CardFooter>
               </Card>
             ))
           )}
