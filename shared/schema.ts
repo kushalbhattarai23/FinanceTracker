@@ -1,6 +1,16 @@
-import { pgTable, text, serial, integer, boolean, timestamp, doublePrecision } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, timestamp, doublePrecision, foreignKey, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+
+// User schema
+export const users = pgTable("users", {
+  id: serial("id").primaryKey(),
+  username: text("username").notNull().unique(),
+  password: text("password").notNull(),
+  email: text("email"),
+  fullName: text("full_name"),
+  createdAt: timestamp("created_at").defaultNow()
+});
 
 // Enum values for the transaction fields
 export const DAYS = [
@@ -58,6 +68,7 @@ export const TRANSACTION_TYPES = ["Income", "Expense"] as const;
 // Transaction schema
 export const transactions = pgTable("transactions", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => users.id),
   day: text("day", { enum: DAYS }).notNull(),
   nepaliDate: text("nepali_date").notNull(),
   englishDate: timestamp("english_date").notNull(),
@@ -72,12 +83,23 @@ export const transactions = pgTable("transactions", {
 // Payment method balances schema
 export const paymentMethods = pgTable("payment_methods", {
   id: serial("id").primaryKey(),
-  name: text("name", { enum: PAYMENT_TYPES }).notNull().unique(),
+  userId: integer("user_id").notNull().references(() => users.id),
+  name: text("name", { enum: PAYMENT_TYPES }).notNull(),
   balance: doublePrecision("balance").notNull().default(0),
   updatedAt: timestamp("updated_at").defaultNow()
+}, (table) => {
+  return {
+    // Make the combination of userId and name unique
+    userNameUnique: uniqueIndex("user_name_unique").on(table.userId, table.name)
+  };
 });
 
 // Create Zod schemas
+export const insertUserSchema = createInsertSchema(users).omit({
+  id: true,
+  createdAt: true
+});
+
 export const insertTransactionSchema = createInsertSchema(transactions).omit({
   id: true,
   createdAt: true
@@ -93,6 +115,8 @@ export const updatePaymentMethodSchema = createInsertSchema(paymentMethods).pick
 });
 
 // Define types
+export type User = typeof users.$inferSelect;
+export type InsertUser = z.infer<typeof insertUserSchema>;
 export type Transaction = typeof transactions.$inferSelect;
 export type InsertTransaction = z.infer<typeof insertTransactionSchema>;
 export type PaymentMethod = typeof paymentMethods.$inferSelect;
@@ -103,8 +127,25 @@ export type PaymentType = typeof PAYMENT_TYPES[number];
 export type TransactionReason = typeof TRANSACTION_REASONS[number];
 export type Day = typeof DAYS[number];
 
+// Extended schema validation
+export const loginSchema = z.object({
+  username: z.string().min(3, "Username must be at least 3 characters"),
+  password: z.string().min(6, "Password must be at least 6 characters")
+});
+
+export const registerSchema = insertUserSchema.extend({
+  username: z.string().min(3, "Username must be at least 3 characters"),
+  password: z.string().min(6, "Password must be at least 6 characters"),
+  confirmPassword: z.string().min(6, "Confirm password must be at least 6 characters")
+}).refine(data => data.password === data.confirmPassword, {
+  message: "Passwords do not match",
+  path: ["confirmPassword"]
+});
+
 // Extended transaction schema with validation
-export const transactionFormSchema = insertTransactionSchema.extend({
+export const transactionFormSchema = insertTransactionSchema.omit({
+  userId: true
+}).extend({
   amount: z.number().positive("Amount must be greater than 0"),
   nepaliDate: z.string().min(1, "Nepali date is required"),
   englishDate: z

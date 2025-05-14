@@ -1,19 +1,45 @@
 import {
   transactions,
   paymentMethods,
+  users,
   type Transaction,
   type InsertTransaction,
   type PaymentMethod,
   type InsertPaymentMethod,
   type UpdatePaymentMethod,
   type PaymentType,
+  type User,
+  type InsertUser,
   PAYMENT_TYPES,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
 import { IStorage } from "./storage";
 
 export class DatabaseStorage implements IStorage {
+  // User methods
+  async getUser(id: number): Promise<User | undefined> {
+    const result = await db.select().from(users).where(eq(users.id, id));
+    return result.length > 0 ? result[0] : undefined;
+  }
+
+  async getUserByUsername(username: string): Promise<User | undefined> {
+    const result = await db.select().from(users).where(eq(users.username, username));
+    return result.length > 0 ? result[0] : undefined;
+  }
+
+  async createUser(insertUser: InsertUser): Promise<User> {
+    const [newUser] = await db
+      .insert(users)
+      .values(insertUser)
+      .returning();
+    
+    // Initialize payment methods for this user
+    await this.initializePaymentMethodsForUser(newUser.id);
+    
+    return newUser;
+  }
+
   // Transaction methods
   async getTransactions(): Promise<Transaction[]> {
     return db.select().from(transactions).orderBy(desc(transactions.englishDate));
@@ -135,59 +161,112 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Utility methods
-  async initializePaymentMethods(): Promise<void> {
+  async initializePaymentMethodsForUser(userId: number): Promise<void> {
     try {
-      const existingMethods = await this.getPaymentMethods();
+      // Get existing payment methods for this user
+      const existingMethods = await db
+        .select()
+        .from(paymentMethods)
+        .where(eq(paymentMethods.userId, userId));
+      
       const existingMethodNames = existingMethods.map(m => m.name);
       
+      // Create missing payment methods for this user
       for (const paymentType of PAYMENT_TYPES) {
         if (!existingMethodNames.includes(paymentType)) {
           try {
             await this.createPaymentMethod({
+              userId,
               name: paymentType,
               balance: 0,
             });
-            console.log(`Created payment method: ${paymentType}`);
-          } catch (error) {
+            console.log(`Created payment method: ${paymentType} for user ${userId}`);
+          } catch (error: any) {
             // If the payment method already exists (e.g., due to a race condition),
             // just log and continue
-            console.log(`Payment method ${paymentType} already exists or couldn't be created:`, error.message);
+            console.log(`Payment method ${paymentType} for user ${userId} already exists or couldn't be created:`, 
+              error?.message || "Unknown error");
           }
         }
       }
-    } catch (error) {
-      console.error("Error initializing payment methods:", error);
+    } catch (error: any) {
+      console.error(`Error initializing payment methods for user ${userId}:`, 
+        error?.message || "Unknown error");
     }
+  }
+  
+  // Legacy method for backward compatibility
+  async initializePaymentMethods(): Promise<void> {
+    console.log("Warning: initializePaymentMethods is deprecated. Use initializePaymentMethodsForUser instead.");
   }
 
   // Utility method to update payment method balance
-  private async updatePaymentMethodBalance(paymentType: PaymentType, amountChange: number): Promise<void> {
+  private async updatePaymentMethodBalance(userId: number, paymentType: PaymentType, amountChange: number): Promise<void> {
     try {
-      const paymentMethod = await this.getPaymentMethodByName(paymentType);
+      const paymentMethod = await db
+        .select()
+        .from(paymentMethods)
+        .where(and(
+          eq(paymentMethods.userId, userId),
+          eq(paymentMethods.name, paymentType)
+        ));
       
-      if (paymentMethod) {
-        const newBalance = paymentMethod.balance + amountChange;
-        await this.updatePaymentMethod(paymentType, newBalance);
+      if (paymentMethod.length > 0) {
+        const currentMethod = paymentMethod[0];
+        const newBalance = currentMethod.balance + amountChange;
+        
+        await db
+          .update(paymentMethods)
+          .set({ 
+            balance: newBalance,
+            updatedAt: new Date()
+          })
+          .where(and(
+            eq(paymentMethods.userId, userId),
+            eq(paymentMethods.name, paymentType)
+          ));
       } else {
         // Create if it doesn't exist
         try {
           await this.createPaymentMethod({
+            userId,
             name: paymentType,
             balance: amountChange,
           });
-        } catch (err) {
+        } catch (err: any) {
           // If creation fails (e.g., due to a race condition where another request created it),
           // try updating it instead
-          console.log(`Could not create payment method ${paymentType}, trying to update instead:`, err.message);
-          const refreshedMethod = await this.getPaymentMethodByName(paymentType);
-          if (refreshedMethod) {
-            const updatedBalance = refreshedMethod.balance + amountChange;
-            await this.updatePaymentMethod(paymentType, updatedBalance);
+          console.log(`Could not create payment method ${paymentType} for user ${userId}, trying to update instead:`, 
+            err?.message || "Unknown error");
+          
+          const refreshedMethod = await db
+            .select()
+            .from(paymentMethods)
+            .where(and(
+              eq(paymentMethods.userId, userId),
+              eq(paymentMethods.name, paymentType)
+            ));
+          
+          if (refreshedMethod.length > 0) {
+            const currentMethod = refreshedMethod[0];
+            const newBalance = currentMethod.balance + amountChange;
+            
+            await db
+              .update(paymentMethods)
+              .set({ 
+                balance: newBalance,
+                updatedAt: new Date()
+              })
+              .where(and(
+                eq(paymentMethods.userId, userId),
+                eq(paymentMethods.name, paymentType)
+              ));
           }
         }
       }
-    } catch (error) {
-      console.error(`Error updating balance for payment method ${paymentType}:`, error);
+    } catch (error: any) {
+      console.error(`Error updating balance for payment method ${paymentType} for user ${userId}:`, 
+        error?.message || "Unknown error");
     }
   }
 }
